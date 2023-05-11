@@ -74,7 +74,7 @@ LLM_HISTORY_LEN = 1
 VECTOR_SEARCH_TOP_K = 3
 
 # 知识检索内容相关度 Score, 数值范围约为0-1100，如果为0，则不生效，经测试设置为小于500时，匹配结果更精准
-VECTOR_SEARCH_SCORE_THRESHOLD = 100
+VECTOR_SEARCH_SCORE_THRESHOLD = 0
 
 NLTK_DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "nltk_data")
 
@@ -91,3 +91,5 @@ flagging username: {FLAG_USER_NAME}
 # 是否开启跨域，默认为False，如果需要开启，请设置为True
 # is open cross domain
 OPEN_CROSS_DOMAIN = False
+
+API_UPLOAD_ROOT_PATH = ''

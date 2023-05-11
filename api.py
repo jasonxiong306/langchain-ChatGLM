@@ -4,12 +4,14 @@ import os
 import shutil
 import subprocess
 import tempfile
-from typing import List, Optional
+import requests
+import asyncio
+from typing import List, Optional, Dict, Any
 
 import nltk
 import pydantic
 import uvicorn
-from fastapi import Body, FastAPI, File, Form, Query, UploadFile, WebSocket
+from fastapi import Body, FastAPI, File, Form, Query, UploadFile, WebSocket, Request
 from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -21,6 +23,7 @@ from configs.model_config import (VS_ROOT_PATH, UPLOAD_ROOT_PATH, EMBEDDING_DEVI
                                   VECTOR_SEARCH_TOP_K, LLM_HISTORY_LEN, OPEN_CROSS_DOMAIN)
 
 nltk.data.path = [NLTK_DATA_PATH] + nltk.data.path
+
 
 class BaseResponse(BaseModel):
     code: int = pydantic.Field(200, description="HTTP status code")
@@ -87,6 +90,7 @@ def get_vs_path(local_doc_id: str):
 def get_file_path(local_doc_id: str, doc_name: str):
     return os.path.join(UPLOAD_ROOT_PATH, local_doc_id, doc_name)
 
+
 async def single_upload_file(
         file: UploadFile = File(description="A single binary file"),
         knowledge_base_id: str = Form(..., description="Knowledge Base Name", example="kb1"),
@@ -119,6 +123,7 @@ async def single_upload_file(
 
     file_status = "文件上传失败，请重新上传"
     return BaseResponse(code=500, msg=file_status)
+
 
 async def upload_file(
         files: Annotated[
@@ -217,7 +222,8 @@ async def chat(
             ],
         ),
 ):
-    vs_path = os.path.join(VS_ROOT_PATH, knowledge_base_id)
+    # vs_path = os.path.join(VS_ROOT_PATH, knowledge_base_id)
+    vs_path = "/root/github/langchain-ChatGLM/vector_store/test_case_v5"
     if not os.path.exists(vs_path):
         raise ValueError(f"Knowledge base {knowledge_base_id} not found")
 
@@ -238,6 +244,7 @@ async def chat(
         source_documents=source_documents,
     )
 
+
 async def no_knowledge_chat(
         question: str = Body(..., description="Question", example="工伤保险是什么？"),
         history: List[List[str]] = Body(
@@ -251,11 +258,11 @@ async def no_knowledge_chat(
             ],
         ),
 ):
-
     for resp, history in local_doc_qa._call(
             query=question, chat_history=history, streaming=True
     ):
         pass
+
 
 async def stream_chat(websocket: WebSocket, knowledge_base_id: str):
     await websocket.accept()
@@ -303,12 +310,66 @@ async def document():
     return RedirectResponse(url="/docs")
 
 
+class FeiShu(BaseModel):
+    challenge: Optional[str] = None
+    type: Optional[str] = None
+    token: Optional[str] = None
+    header: Dict[str, Any] = None
+    event: Dict[str, Any] = None
+
+
+# {"challenge":"30c1bad8-65df-47f0-9e83-30790cc93153","type":"url_verification","token":"RzUm7DyopWiAdKDFCoQF5d8xAWvKzOkJ"}
+def feishu_auth():
+    url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+    resq = {"app_id": "cli_a4d637b299fe900e", "app_secret": "7xSLLCWjmB8kPecaLv6oEfD4yMPQiPwD"}
+    resp = requests.post(url, data=resq)
+    print(resp.text)
+    return json.loads(resp.text)["tenant_access_token"]
+
+
+async def feishu_event_async(fei_shu: FeiShu):
+    print("feishu_event_async start")
+    print("event:", json.dumps(fei_shu.event))
+    print("header:", json.dumps(fei_shu.header))
+    query = json.loads(fei_shu.event["message"]["content"])["text"]
+    print("query:", query)
+    vs_path = "/root/github/langchain-ChatGLM/vector_store/test_case_v5"
+    if not os.path.exists(vs_path):
+        raise ValueError(f"Knowledge base {vs_path} not found")
+    history = []
+    for resp, history in local_doc_qa.get_knowledge_based_answer(
+            query=query, vs_path=vs_path, chat_history=history, streaming=True
+    ):
+        pass
+
+    message_id = fei_shu.event["message"]["message_id"]
+    url = "https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/reply".format(message_id=message_id)
+    content = "{\"text\":\"" +resp["result"].replace("\n","\\n")+"\"}"
+    replay = {
+        "msg_type": "text",
+        "content": content
+    }
+
+    print("url and replay: ", url, replay)
+    tenant_access_token = feishu_auth()
+    resp = requests.post(url, data=replay, headers={"Authorization": "Bearer " + tenant_access_token})
+    print("feishu resp:", resp.text)
+    print("feishu_event_async end")
+
+async def feishu_event(fei_shu: FeiShu):
+    print("feishu_event start")
+    asyncio.create_task(feishu_event_async(fei_shu))
+    print("feishu_event end")
+    return fei_shu
+
+
+
 def main():
     global app
     global local_doc_qa
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=7861)
+    parser.add_argument("--port", type=int, default=6006)
     args = parser.parse_args()
 
     app = FastAPI()
@@ -331,6 +392,7 @@ def main():
     app.get("/chat-docs/list", response_model=ListDocsResponse)(list_docs)
     app.delete("/chat-docs/delete", response_model=BaseResponse)(delete_docs)
     app.get("/", response_model=BaseResponse)(document)
+    app.post("/feishu/event", response_model=FeiShu)(feishu_event)
 
     local_doc_qa = LocalDocQA()
     local_doc_qa.init_cfg(
